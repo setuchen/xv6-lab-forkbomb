@@ -434,6 +434,44 @@ wait(uint64 addr)
   }
 }
 
+// Non-blocking wait: check if there is any ZOMBIE child.
+// If found, reap it and return its pid.
+// If none, return 0 immediately.
+int
+wait_noblock(void)
+{
+  struct proc *p = myproc();
+  struct proc *pp;
+  int pid = 0;
+
+  acquire(&wait_lock);
+
+  // 掃一次整個 proc table，看這個 process 有沒有 ZOMBIE child
+  for(pp = proc; pp < &proc[NPROC]; pp++){
+    if(pp->parent == p){
+      // 跟 wait() 一樣，要拿 child 的 lock 再檢查 state
+      acquire(&pp->lock);
+      if(pp->state == ZOMBIE){
+        // 找到一個 ZOMBIE child → 回收並回傳 pid
+        pid = pp->pid;
+
+        // 不用 copyout xstate，因為這是給 shell 用來 reap background jobs
+        freeproc(pp);
+
+        release(&pp->lock);
+        release(&wait_lock);
+        return pid;
+      }
+      release(&pp->lock);
+    }
+  }
+
+  // 沒有任何 ZOMBIE child → 不阻塞，直接回傳 0
+  release(&wait_lock);
+  return 0;
+}
+
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:

@@ -36,6 +36,14 @@ sys_wait(void)
 }
 
 uint64
+sys_wait_noblock(void)
+{
+  // 不用從 user 傳任何參數，只要詢問
+  int pid = wait_noblock();    // 呼叫等一下要在 proc.c 實作的內核函式
+  return pid;                  // 回傳值給 user
+}
+
+uint64
 sys_sbrk(void)
 {
   uint64 addr;
