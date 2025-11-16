@@ -3,6 +3,7 @@
 #include "kernel/types.h"
 #include "user/user.h"
 #include "kernel/fcntl.h"
+#include "kernel/param.h"
 
 // Parsed command representation
 #define EXEC  1
@@ -12,6 +13,16 @@
 #define BACK  5
 
 #define MAXARGS 10
+
+int jobs[NPROC];
+int interactive = 1;  // 1 = 互動模式, 0 = 執行 script
+
+void
+init_jobs(void)
+{
+  for (int i = 0; i < NPROC; i++)
+    jobs[i] = 0;
+}
 
 struct cmd {
   int type;
@@ -53,6 +64,7 @@ int fork1(void);  // Fork but panics on failure.
 void panic(char*);
 struct cmd *parsecmd(char*);
 void runcmd(struct cmd*) __attribute__((noreturn));
+
 
 // Execute cmd.  Never returns.
 void
@@ -131,13 +143,19 @@ runcmd(struct cmd *cmd)
   exit(0);
 }
 
-// 收掉所有已經結束的背景工作，並印出狀態
+//當 wait_noblock() 收到一個背景 child 的 pid 時，把他從 jobs[] 清掉
 void
 reap_bg_jobs(void)
 {
   int pid, status;
-  // 只要還有 zombie child，就一直收
-  while((pid = wait_noblock(&status)) > 0){
+  while ((pid = wait_noblock(&status)) > 0) {
+    // 從 jobs[] 裡刪掉這個 pid
+    for (int i = 0; i < NPROC; i++) {
+      if (jobs[i] == pid) {
+        jobs[i] = 0;
+        break;
+      }
+    }
     printf("[bg %d] exited with status %d\n", pid, status);
   }
 }
@@ -148,7 +166,10 @@ getcmd(char *buf, int nbuf)
 {
   reap_bg_jobs();//先把背景的收掉
 
-  write(2, "$ ", 2);
+  // 只有互動模式才印 prompt
+  if (interactive)
+    write(2, "$ ", 2);
+ 
   memset(buf, 0, nbuf);
   gets(buf, nbuf);
   if(buf[0] == 0) // EOF
@@ -157,10 +178,24 @@ getcmd(char *buf, int nbuf)
 }
 
 int
-main(void)
+main(int argc, char *argv[])
 {
+  init_jobs();
+
   static char buf[100];
   int fd;
+
+  if (argc > 1) {
+    // 有帶 script 檔：進入「非互動模式」
+    interactive = 0;
+
+    // 把 stdin (fd 0) 換成 script 檔
+    close(0);
+    if (open(argv[1], O_RDONLY) < 0) {
+      fprintf(2, "sh: cannot open %s\n", argv[1]);
+      exit(1);
+    }
+  }
 
   // Ensure that three file descriptors are open.
   while((fd = open("console", O_RDWR)) >= 0){
@@ -183,6 +218,18 @@ main(void)
       continue;
     }
 
+    if (buf[0] == 'j' && buf[1] == 'o' && buf[2] == 'b' && buf[3] == 's'
+        && (buf[4] == '\n' || buf[4] == 0)) {
+      // 印出所有還存在的背景 pid
+      for (int i = 0; i < NPROC; i++) {
+        if (jobs[i] != 0) {
+          printf("%d\n", jobs[i]);
+        }
+      }
+      // 如果 jobs[] 全部是 0，就什麼都不印，符合 spec
+      continue;  // 不要再往下 parsecmd/exec
+    }
+
     // 先在 parent 解析整個指令（包含 BACK 節點）
     struct cmd *cmd = parsecmd(buf);
 
@@ -195,6 +242,13 @@ main(void)
     }
 
     if(is_bg){
+      // 記錄這個背景工作的 pid
+      for (int i = 0; i < NPROC; i++) {
+        if (jobs[i] == 0) {
+          jobs[i] = pid;
+          break;
+        }
+      }
       // 背景工作：印 [pid]，但不 wait
       printf("[%d]\n", pid);
       // 之後回到 while 迴圈，下一輪 getcmd 會再印新的 $
