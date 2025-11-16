@@ -38,9 +38,9 @@ sys_wait(void)
 uint64
 sys_wait_noblock(void)
 {
-  // 不用從 user 傳任何參數，只要詢問
-  int pid = wait_noblock();    // 呼叫等一下要在 proc.c 實作的內核函式
-  return pid;                  // 回傳值給 user
+  uint64 p;  // user 傳來的指標位址
+  argaddr(0, &p);          // 讀取第 0 個 syscall 參數（狀態指標）
+  return wait_noblock(p);  // 丟給 kernel 內部的 wait_noblock(addr)
 }
 
 uint64

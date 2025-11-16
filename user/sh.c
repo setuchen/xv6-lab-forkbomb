@@ -76,6 +76,7 @@ runcmd(struct cmd *cmd)
     ecmd = (struct execcmd*)cmd;
     if(ecmd->argv[0] == 0)
       exit(1);
+    //printf("DEBUG: exec '%s'\n", ecmd->argv[0]);
     exec(ecmd->argv[0], ecmd->argv);
     fprintf(2, "exec %s failed\n", ecmd->argv[0]);
     break;
@@ -124,16 +125,29 @@ runcmd(struct cmd *cmd)
 
   case BACK:
     bcmd = (struct backcmd*)cmd;
-    if(fork1() == 0)
-      runcmd(bcmd->cmd);
+    runcmd(bcmd->cmd);
     break;
   }
   exit(0);
 }
 
+// 收掉所有已經結束的背景工作，並印出狀態
+void
+reap_bg_jobs(void)
+{
+  int pid, status;
+  // 只要還有 zombie child，就一直收
+  while((pid = wait_noblock(&status)) > 0){
+    printf("[bg %d] exited with status %d\n", pid, status);
+  }
+}
+
+
 int
 getcmd(char *buf, int nbuf)
 {
+  reap_bg_jobs();//先把背景的收掉
+
   write(2, "$ ", 2);
   memset(buf, 0, nbuf);
   gets(buf, nbuf);
@@ -158,6 +172,9 @@ main(void)
 
   // Read and run input commands.
   while(getcmd(buf, sizeof(buf)) >= 0){
+
+    reap_bg_jobs();
+
     if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
       // Chdir must be called by the parent, not the child.
       buf[strlen(buf)-1] = 0;  // chop \n
@@ -165,9 +182,34 @@ main(void)
         fprintf(2, "cannot cd %s\n", buf+3);
       continue;
     }
-    if(fork1() == 0)
-      runcmd(parsecmd(buf));
-    wait(0);
+
+    // 先在 parent 解析整個指令（包含 BACK 節點）
+    struct cmd *cmd = parsecmd(buf);
+
+    // 判斷最外層是不是 BACK（sleep 10 & 這種）
+    int is_bg = (cmd->type == BACK);
+
+    int pid = fork1();
+    if(pid == 0){
+      runcmd(cmd);
+    }
+
+    if(is_bg){
+      // 背景工作：印 [pid]，但不 wait
+      printf("[%d]\n", pid);
+      // 之後回到 while 迴圈，下一輪 getcmd 會再印新的 $
+    } else {
+      // 前景工作：同步等待它結束
+      // 這裡我們只需等到這個 pid 結束即可
+      int wpid;
+      while((wpid = wait(0)) >= 0){
+        if(wpid == pid)
+          break;
+        // 理論上不太會 hit 到這裡（沒有其他 child），
+        // 如果有，也可以把它當背景工作結束印出訊息：
+        // printf("[bg %d] exited\n", wpid);
+      }
+    }
   }
   exit(0);
 }
