@@ -164,18 +164,20 @@ reap_bg_jobs(void)
 int
 getcmd(char *buf, int nbuf)
 {
-  reap_bg_jobs();//先把背景的收掉
+  // BEFORE printing a new prompt: 先收背景 job
+  reap_bg_jobs();
 
-  // 只有互動模式才印 prompt
   if (interactive)
     write(2, "$ ", 2);
- 
+
   memset(buf, 0, nbuf);
-  gets(buf, nbuf);
-  if(buf[0] == 0) // EOF
+  if(gets(buf, nbuf) == 0) // EOF
+    return -1;
+  if(buf[0] == 0) // 空行
     return -1;
   return 0;
 }
+
 
 int
 main(int argc, char *argv[])
@@ -255,15 +257,22 @@ main(int argc, char *argv[])
     } else {
       // 前景工作：同步等待它結束
       // 這裡我們只需等到這個 pid 結束即可
-      int wpid;
-      while((wpid = wait(0)) >= 0){
-        if(wpid == pid)
+      int wpid, status;
+      while((wpid = wait(&status)) >= 0){
+        if(wpid == pid){
           break;
-        // 理論上不太會 hit 到這裡（沒有其他 child），
-        // 如果有，也可以把它當背景工作結束印出訊息：
-        // printf("[bg %d] exited\n", wpid);
+        } else {
+          for(int i = 0; i < NPROC; i++){
+            if(jobs[i] == wpid){
+              jobs[i] = 0;
+              break;
+            }
+          }
+          printf("[bg %d] exited with status %d\n", wpid, status);
+        }
       }
     }
+    reap_bg_jobs();
   }
   exit(0);
 }
